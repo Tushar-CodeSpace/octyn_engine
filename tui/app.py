@@ -1,19 +1,19 @@
-from datetime import datetime
 import asyncio
 import threading
+from datetime import datetime
 import uvicorn
 
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Input, RichLog, Static
+from textual.widgets import Header, Footer, Input, Static
 from textual.containers import Vertical, VerticalScroll
 
 from api.app import api
 from core.config import API_HOST, API_PORT
 from db.postgres import connect, close
 from tcp.state import runtime, TcpMode
-from tcp.cyclic import cyclic
 from tcp import server as tcp_server
 from tcp import client as tcp_client
+from tcp.cyclic import cyclic
 from tui.layout import CSS
 
 
@@ -33,51 +33,45 @@ class OctynTUI(App):
 
             self.input = Input(placeholder="› type command and press enter")
             yield self.input
+        yield Footer()
 
     async def on_mount(self):
         self.input.focus()
         self.log_lines: list[str] = []
-        self.write_log("UI started (IDLE)")
 
         tcp_server.log_cb = self.write_log
 
         await connect()
         threading.Thread(target=run_api, daemon=True).start()
 
-        self.write_log("[SYSTEM] /start tcp_server <port>")
-        self.write_log("[SYSTEM] /start tcp_client <host> <port>")
-        self.write_log("[SYSTEM] /cyclic \"CMD\" on tcp_server <ms>")
-        self.write_log("[SYSTEM] /cyclic \"CMD\" on tcp_client <ms>")
-        self.write_log("[SYSTEM] /cyclic stop")
-
-
+        self.write_log("● UI started (IDLE)")
+        self.write_log("● /start tcp_server <port>")
+        self.write_log("● /start tcp_client <host> <port>")
+        self.write_log("● /cyclic \"CMD\" on tcp_server <ms>")
+        self.write_log("● /cyclic stop")
 
     def write_log(self, msg: str):
         ts = datetime.now().strftime("%H:%M:%S")
         line = f"[{ts}] {msg}"
 
         self.log_lines.append(line)
-
         if len(self.log_lines) > 500:
             self.log_lines = self.log_lines[-500:]
 
         self.log_view.update("\n".join(self.log_lines))
-
-        # scroll the parent (VerticalScroll)
         self.log_view.parent.scroll_end(animate=False)
-
 
     async def on_input_submitted(self, event):
         msg = event.value.strip()
         self.input.value = ""
-        parts = msg.split()
-        if not parts:
+        if not msg:
             return
 
+        parts = msg.split()
         cmd = parts[0]
 
         try:
-            # ---------- START ----------
+            # START
             if cmd == "/start":
                 if parts[1] == "tcp_server":
                     port = int(parts[2])
@@ -86,7 +80,7 @@ class OctynTUI(App):
                     runtime.mode = TcpMode.SERVER
                     runtime.port = port
                     asyncio.create_task(tcp_server.start(port))
-                    self.write_log(f"[SYSTEM] TCP SERVER started on {port}")
+                    self.write_log(f"● SERVER started on {port}")
                     return
 
                 if parts[1] == "tcp_client":
@@ -96,127 +90,107 @@ class OctynTUI(App):
                     runtime.mode = TcpMode.CLIENT
                     runtime.host, runtime.port = host, port
                     asyncio.create_task(tcp_client.start(host, port))
-                    self.write_log(f"[SYSTEM] TCP CLIENT started {host}:{port}")
+                    self.write_log(f"● CLIENT connected {host}:{port}")
                     return
 
-            # ---------- STOP ----------
+            # STOP
             if cmd == "/stop":
+                await cyclic.stop()
                 if parts[1] == "tcp_server":
-                    await cyclic.stop()
                     await tcp_server.stop()
                     runtime.mode = None
-                    self.write_log("[SYSTEM] TCP SERVER stopped")
                     return
-
                 if parts[1] == "tcp_client":
-                    await cyclic.stop()
                     await tcp_client.stop()
                     runtime.mode = None
-                    self.write_log("[SYSTEM] TCP CLIENT stopped")
                     return
 
-            # ---------- RESTART ----------
+            # RESTART
             if cmd == "/restart":
+                await cyclic.stop()
                 if parts[1] == "tcp_server":
                     await tcp_server.stop()
                     port = int(parts[2]) if len(parts) > 2 else runtime.port
-                    if not port:
-                        self.write_log("[ERROR] No previous server port")
-                        return
                     runtime.mode = TcpMode.SERVER
                     runtime.port = port
                     asyncio.create_task(tcp_server.start(port))
-                    self.write_log(f"[SYSTEM] TCP SERVER restarted on {port}")
+                    self.write_log(f"● SERVER restarted on {port}")
                     return
 
                 if parts[1] == "tcp_client":
                     await tcp_client.stop()
-                    if len(parts) > 3:
-                        host, port = parts[2], int(parts[3])
-                    else:
-                        host, port = runtime.host, runtime.port
-                    if not host or not port:
-                        self.write_log("[ERROR] No previous client config")
-                        return
+                    host = parts[2] if len(parts) > 3 else runtime.host
+                    port = int(parts[3]) if len(parts) > 3 else runtime.port
                     runtime.mode = TcpMode.CLIENT
                     runtime.host, runtime.port = host, port
                     asyncio.create_task(tcp_client.start(host, port))
-                    self.write_log(f"[SYSTEM] TCP CLIENT restarted {host}:{port}")
+                    self.write_log(f"● CLIENT restarted {host}:{port}")
                     return
 
             # ---------- CYCLIC ----------
             if cmd == "/cyclic":
                 try:
                     # /cyclic stop
-                    if parts[1] == "stop":
+                    if len(parts) == 2 and parts[1] == "stop":
                         await cyclic.stop()
-                        self.write_log("[SYSTEM] Cyclic command stopped")
+                        self.write_log("● CYCLIC stopped")
                         return
 
-                    # /cyclic "RHINO" on tcp_server 10000
-                    raw = msg.split('"')
-                    if len(raw) < 3:
-                        self.write_log("[ERROR] Invalid cyclic syntax")
+                    # Expected: /cyclic "CMD" on tcp_server 5000
+                    if '"' not in msg:
+                        self.write_log("✖ Invalid cyclic syntax")
                         return
 
-                    command = raw[1]
-                    tail = raw[2].strip().split()
+                    # Extract command inside quotes
+                    quoted = msg.split('"')
+                    command = quoted[1].strip()
 
-                    if tail[0] != "on":
-                        self.write_log("[ERROR] Expected 'on'")
+                    tail = quoted[2].strip().split()
+                    if len(tail) != 3 or tail[0] != "on":
+                        self.write_log("✖ Invalid cyclic syntax")
                         return
 
-                    mode = tail[1]
+                    target = tail[1]
                     interval_ms = int(tail[2])
 
-                    if mode == "tcp_server":
+                    if target == "tcp_server":
                         if runtime.mode != TcpMode.SERVER:
-                            self.write_log("[ERROR] tcp_server not running")
+                            self.write_log("✖ tcp_server not running")
                             return
+
                         await cyclic.start(command, TcpMode.SERVER, interval_ms)
-                        self.write_log(
-                            f"[SYSTEM] Cyclic '{command}' on SERVER every {interval_ms}ms"
-                        )
+                        self.write_log(f"⟳ CYCLIC '{command}' every {interval_ms}ms (SERVER)")
                         return
 
-                    if mode == "tcp_client":
+                    if target == "tcp_client":
                         if runtime.mode != TcpMode.CLIENT:
-                            self.write_log("[ERROR] tcp_client not running")
+                            self.write_log("✖ tcp_client not running")
                             return
+
                         await cyclic.start(command, TcpMode.CLIENT, interval_ms)
-                        self.write_log(
-                            f"[SYSTEM] Cyclic '{command}' on CLIENT every {interval_ms}ms"
-                        )
+                        self.write_log(f"⟳ CYCLIC '{command}' every {interval_ms}ms (CLIENT)")
                         return
 
-                    self.write_log("[ERROR] Unknown cyclic target")
+                    self.write_log("✖ Unknown cyclic target")
+                    return
 
                 except Exception as e:
-                    self.write_log(f"[ERROR] {e}")
-                return
+                    self.write_log(f"✖ {e}")
+                    return
 
-            # ---------- CLEAR LOGS ----------            
-            if msg == "/clear":
-                self.log_lines.clear()
-                self.log_view.update("")
-                return
-
-
-            # ---------- SEND ----------
+            # SEND
             if runtime.mode == TcpMode.SERVER:
                 await tcp_server.send(msg)
-                self.write_log(f"[TX] {msg}")
                 return
 
             if runtime.mode == TcpMode.CLIENT:
                 await tcp_client.send(msg)
-                self.write_log(f"[TX] {msg}")
                 return
 
-            self.write_log("[ERROR] No active TCP mode")
+            self.write_log("✖ No active TCP mode")
 
         except Exception as e:
-            self.write_log(f"[ERROR] {e}")
+            self.write_log(f"✖ {e}")
 
     async def on_shutdown_request(self):
         await close()
