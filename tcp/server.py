@@ -1,7 +1,7 @@
 import asyncio
-from core.config import TCP_HOST, TCP_PORT, RHINO_CMD, RHINO_INTERVAL
 
 clients = set()
+server_instance = None
 log_cb = None
 
 def log(msg: str):
@@ -25,28 +25,27 @@ async def handle_client(reader, writer):
         await writer.wait_closed()
         log(f"[SYSTEM] Client disconnected {addr}")
 
+async def start(port: int):
+    global server_instance
+    server_instance = await asyncio.start_server(
+        handle_client, "0.0.0.0", port
+    )
+    log(f"[SYSTEM] TCP SERVER started on :{port}")
+    async with server_instance:
+        await server_instance.serve_forever()
+
+async def stop():
+    global server_instance
+    if server_instance:
+        server_instance.close()
+        await server_instance.wait_closed()
+        server_instance = None
+        log("[SYSTEM] TCP SERVER stopped")
+
 async def send(msg: str):
-    dead = []
-    for w in clients:
+    for w in list(clients):
         try:
             w.write((msg + "\n").encode())
             await w.drain()
         except:
-            dead.append(w)
-
-    for d in dead:
-        clients.discard(d)
-
-    if clients:
-        log(f"[TX] {msg} → {len(clients)} client(s)")
-
-async def rhino_loop():
-    while True:
-        await send(RHINO_CMD)
-        await asyncio.sleep(RHINO_INTERVAL)
-
-async def start():
-    server = await asyncio.start_server(handle_client, TCP_HOST, TCP_PORT)
-    log(f"[SYSTEM] TCP server started on :{TCP_PORT}")
-    async with server:
-        await server.serve_forever()
+            clients.discard(w)

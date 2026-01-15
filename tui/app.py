@@ -9,7 +9,9 @@ from textual.containers import Vertical
 from api.app import api
 from core.config import API_HOST, API_PORT
 from db.postgres import connect, close
-from tcp import server
+from tcp.state import runtime, TcpMode
+from tcp import server as tcp_server
+from tcp import client as tcp_client
 from tui.layout import CSS
 
 
@@ -23,57 +25,127 @@ class OctynTUI(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Vertical():
-            self.log_view = RichLog(
-                auto_scroll=True,
-                markup=True,
-                wrap=False
-            )
+            self.log_view = RichLog(auto_scroll=True, markup=True, wrap=False)
             yield self.log_view
-
-            self.input = Input(
-                placeholder="› type command and press enter"
-            )
+            self.input = Input(placeholder="› type command and press enter")
             yield self.input
         yield Footer()
 
     async def on_mount(self):
         self.input.focus()
-        self.log_view.write("[bold green]UI started[/bold green]\n")
+        self.log_view.write("[bold green]UI started (IDLE)[/bold green]\n")
 
-        server.log_cb = self.write_log
+        tcp_server.log_cb = self.write_log
 
-        try:
-            await connect()
-            self.write_log("[SYSTEM] Database connected")
+        await connect()
+        threading.Thread(target=run_api, daemon=True).start()
 
-            asyncio.create_task(server.start())
-            asyncio.create_task(server.rhino_loop())
-
-            threading.Thread(target=run_api, daemon=True).start()
-
-            self.write_log("[SYSTEM] TCP :3001 | API :8000 | RHINO every 10s")
-
-        except Exception as e:
-            self.log_view.write(f"[bold red]FATAL:[/bold red] {e}\n")
+        self.write_log("[SYSTEM] /start tcp_server <port>")
+        self.write_log("[SYSTEM] /start tcp_client <host> <port>")
 
     def write_log(self, msg: str):
-        if msg.startswith("[RX]"):
-            self.log_view.write(f"[green]{msg}[/green]\n")
-        elif msg.startswith("[TX]"):
-            self.log_view.write(f"[cyan]{msg}[/cyan]\n")
-        elif msg.startswith("[ERROR]"):
-            self.log_view.write(f"[bold red]{msg}[/bold red]\n")
-        elif msg.startswith("[SYSTEM]"):
-            self.log_view.write(f"[bold yellow]{msg}[/bold yellow]\n")
-        else:
-            self.log_view.write(msg + "\n")
+        color = {
+            "[RX]": "green",
+            "[TX]": "cyan",
+            "[SYSTEM]": "yellow",
+            "[ERROR]": "red",
+        }
+        for k, c in color.items():
+            if msg.startswith(k):
+                self.log_view.write(f"[{c}]{msg}[/{c}]\n")
+                return
+        self.log_view.write(msg + "\n")
 
     async def on_input_submitted(self, event):
         msg = event.value.strip()
-        if msg:
-            await server.send(msg)
-            self.log_view.write(f"[cyan][TX-MANUAL][/cyan] {msg}\n")
         self.input.value = ""
+        parts = msg.split()
+        if not parts:
+            return
+
+        cmd = parts[0]
+
+        try:
+            # ---------- START ----------
+            if cmd == "/start":
+                if parts[1] == "tcp_server":
+                    port = int(parts[2])
+                    await tcp_client.stop()
+                    await tcp_server.stop()
+                    runtime.mode = TcpMode.SERVER
+                    runtime.port = port
+                    asyncio.create_task(tcp_server.start(port))
+                    self.write_log(f"[SYSTEM] TCP SERVER started on {port}")
+                    return
+
+                if parts[1] == "tcp_client":
+                    host, port = parts[2], int(parts[3])
+                    await tcp_server.stop()
+                    await tcp_client.stop()
+                    runtime.mode = TcpMode.CLIENT
+                    runtime.host, runtime.port = host, port
+                    asyncio.create_task(tcp_client.start(host, port))
+                    self.write_log(f"[SYSTEM] TCP CLIENT started {host}:{port}")
+                    return
+
+            # ---------- STOP ----------
+            if cmd == "/stop":
+                if parts[1] == "tcp_server":
+                    await tcp_server.stop()
+                    runtime.mode = None
+                    self.write_log("[SYSTEM] TCP SERVER stopped")
+                    return
+
+                if parts[1] == "tcp_client":
+                    await tcp_client.stop()
+                    runtime.mode = None
+                    self.write_log("[SYSTEM] TCP CLIENT stopped")
+                    return
+
+            # ---------- RESTART ----------
+            if cmd == "/restart":
+                if parts[1] == "tcp_server":
+                    await tcp_server.stop()
+                    port = int(parts[2]) if len(parts) > 2 else runtime.port
+                    if not port:
+                        self.write_log("[ERROR] No previous server port")
+                        return
+                    runtime.mode = TcpMode.SERVER
+                    runtime.port = port
+                    asyncio.create_task(tcp_server.start(port))
+                    self.write_log(f"[SYSTEM] TCP SERVER restarted on {port}")
+                    return
+
+                if parts[1] == "tcp_client":
+                    await tcp_client.stop()
+                    if len(parts) > 3:
+                        host, port = parts[2], int(parts[3])
+                    else:
+                        host, port = runtime.host, runtime.port
+                    if not host or not port:
+                        self.write_log("[ERROR] No previous client config")
+                        return
+                    runtime.mode = TcpMode.CLIENT
+                    runtime.host, runtime.port = host, port
+                    asyncio.create_task(tcp_client.start(host, port))
+                    self.write_log(f"[SYSTEM] TCP CLIENT restarted {host}:{port}")
+                    return
+
+            # ---------- SEND ----------
+            if runtime.mode == TcpMode.SERVER:
+                await tcp_server.send(msg)
+                self.write_log(f"[TX] {msg}")
+                return
+
+            if runtime.mode == TcpMode.CLIENT:
+                await tcp_client.send(msg)
+                self.write_log(f"[TX] {msg}")
+                return
+
+            self.write_log("[ERROR] No active TCP mode")
+
+        except Exception as e:
+            self.write_log(f"[ERROR] {e}")
 
     async def on_shutdown_request(self):
         await close()

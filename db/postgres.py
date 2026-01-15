@@ -1,11 +1,16 @@
 import asyncpg
-from core.config import DB_CONFIG
 
 pool = None
 
 async def connect():
     global pool
-    pool = await asyncpg.create_pool(**DB_CONFIG)
+    pool = await asyncpg.create_pool(
+        host="127.0.0.1",
+        port=5432,
+        database="octyn_engine_db",
+        user="postgres",
+        password="postgres",
+    )
 
     async with pool.acquire() as conn:
         await conn.execute("""
