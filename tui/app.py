@@ -16,6 +16,13 @@ from tcp import client as tcp_client
 from tcp.cyclic import cyclic
 from tui.layout import CSS
 
+ANSI_RESET = "\033[0m"
+ANSI_DIM = "\033[2m"
+ANSI_RED = "\033[31m"
+ANSI_GREEN = "\033[32m"
+ANSI_YELLOW = "\033[33m"
+ANSI_BLUE = "\033[34m"
+ANSI_CYAN = "\033[36m"
 
 def run_api():
     uvicorn.run(api, host=API_HOST, port=API_PORT, log_level="warning")
@@ -52,9 +59,28 @@ class OctynTUI(App):
 
     def write_log(self, msg: str):
         ts = datetime.now().strftime("%H:%M:%S")
-        line = f"[{ts}] {msg}"
+
+        # detect level by prefix symbol
+        if msg.startswith("●"):
+            color = ANSI_CYAN
+        elif msg.startswith("←"):
+            color = ANSI_GREEN
+        elif msg.startswith("→"):
+            color = ANSI_BLUE
+        elif msg.startswith("⟳"):
+            color = ANSI_YELLOW
+        elif msg.startswith("✖"):
+            color = ANSI_RED
+        else:
+            color = ""
+
+        line = (
+            f"{ANSI_DIM}[{ts}]{ANSI_RESET} "
+            f"{color}{msg}{ANSI_RESET}"
+        )
 
         self.log_lines.append(line)
+
         if len(self.log_lines) > 500:
             self.log_lines = self.log_lines[-500:]
 
