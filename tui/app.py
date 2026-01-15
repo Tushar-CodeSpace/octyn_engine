@@ -219,4 +219,7 @@ class OctynTUI(App):
             self.write_log(f"✖ {e}")
 
     async def on_shutdown_request(self):
+        await cyclic.stop()
+        await tcp_server.stop()
+        await tcp_client.stop()
         await close()
