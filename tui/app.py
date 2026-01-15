@@ -58,9 +58,18 @@ class OctynTUI(App):
         self.write_log("● /cyclic stop")
 
     def write_log(self, msg: str):
+        # If UI is shutting down, ignore logs
+        if not hasattr(self, "log_view") or self.log_view is None:
+            return
+
+        # parent can be None during shutdown
+        parent = self.log_view.parent
+        if parent is None:
+            return
+
         ts = datetime.now().strftime("%H:%M:%S")
 
-        # detect level by prefix symbol
+        # ANSI color selection (unchanged)
         if msg.startswith("●"):
             color = ANSI_CYAN
         elif msg.startswith("←"):
@@ -80,12 +89,17 @@ class OctynTUI(App):
         )
 
         self.log_lines.append(line)
-
         if len(self.log_lines) > 500:
             self.log_lines = self.log_lines[-500:]
 
         self.log_view.update("\n".join(self.log_lines))
-        self.log_view.parent.scroll_end(animate=False)
+
+        # Safe scroll
+        try:
+            parent.scroll_end(animate=False)
+        except Exception:
+            pass
+
 
     async def on_input_submitted(self, event):
         msg = event.value.strip()
