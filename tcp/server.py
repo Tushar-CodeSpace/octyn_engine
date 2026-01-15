@@ -18,7 +18,7 @@ async def handle_client(reader, writer):
             data = await reader.read(1024)
             if not data:
                 break
-            log(f"[RX] {addr}: {data.decode(errors='ignore').strip()}")
+            log(f"← {addr[0]}:{addr[1]} {data.decode(errors='ignore').strip()}")
     finally:
         clients.discard(writer)
         writer.close()

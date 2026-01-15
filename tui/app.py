@@ -1,10 +1,11 @@
+from datetime import datetime
 import asyncio
 import threading
 import uvicorn
 
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Input, RichLog
-from textual.containers import Vertical
+from textual.widgets import Header, Footer, Input, RichLog, Static
+from textual.containers import Vertical, VerticalScroll
 
 from api.app import api
 from core.config import API_HOST, API_PORT
@@ -26,15 +27,17 @@ class OctynTUI(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Vertical():
-            self.log_view = RichLog(auto_scroll=True, markup=True, wrap=False)
-            yield self.log_view
+            with VerticalScroll():
+                self.log_view = Static("")
+                yield self.log_view
+
             self.input = Input(placeholder="› type command and press enter")
             yield self.input
-        yield Footer()
 
     async def on_mount(self):
         self.input.focus()
-        self.log_view.write("[bold green]UI started (IDLE)[/bold green]\n")
+        self.log_lines: list[str] = []
+        self.write_log("UI started (IDLE)")
 
         tcp_server.log_cb = self.write_log
 
@@ -48,18 +51,21 @@ class OctynTUI(App):
         self.write_log("[SYSTEM] /cyclic stop")
 
 
+
     def write_log(self, msg: str):
-        color = {
-            "[RX]": "green",
-            "[TX]": "cyan",
-            "[SYSTEM]": "yellow",
-            "[ERROR]": "red",
-        }
-        for k, c in color.items():
-            if msg.startswith(k):
-                self.log_view.write(f"[{c}]{msg}[/{c}]\n")
-                return
-        self.log_view.write(msg + "\n")
+        ts = datetime.now().strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}"
+
+        self.log_lines.append(line)
+
+        if len(self.log_lines) > 500:
+            self.log_lines = self.log_lines[-500:]
+
+        self.log_view.update("\n".join(self.log_lines))
+
+        # scroll the parent (VerticalScroll)
+        self.log_view.parent.scroll_end(animate=False)
+
 
     async def on_input_submitted(self, event):
         msg = event.value.strip()
@@ -187,6 +193,12 @@ class OctynTUI(App):
 
                 except Exception as e:
                     self.write_log(f"[ERROR] {e}")
+                return
+
+            # ---------- CLEAR LOGS ----------            
+            if msg == "/clear":
+                self.log_lines.clear()
+                self.log_view.update("")
                 return
 
 

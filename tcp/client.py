@@ -18,5 +18,5 @@ async def stop():
 
 async def send(msg: str):
     if writer:
-        writer.write((msg + "\n").encode())
+        writer.write(("→" + msg + "\n").encode())
         await writer.drain()
