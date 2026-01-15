@@ -1,5 +1,5 @@
 CSS = """
-Screen { background: #0b0f14; }
+Screen { background: black; }
 
 Header, Footer {
     background: #111827;
@@ -21,12 +21,13 @@ Input {
 }
 
 Static {
-    padding: 0;
+    padding-left: 2;
+    padding-top: 1;
 }
 
 VerticalScroll {
     height: 1fr;
-    background: #020617;
-    border: tall #38bdf8;
+    scrollbar-color: #1e40af #020617;
+    scrollbar-size: 1 1;
 }
 """
