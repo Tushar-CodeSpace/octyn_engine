@@ -10,6 +10,7 @@ from api.app import api
 from core.config import API_HOST, API_PORT
 from db.postgres import connect, close
 from tcp.state import runtime, TcpMode
+from tcp.cyclic import cyclic
 from tcp import server as tcp_server
 from tcp import client as tcp_client
 from tui.layout import CSS
@@ -42,6 +43,10 @@ class OctynTUI(App):
 
         self.write_log("[SYSTEM] /start tcp_server <port>")
         self.write_log("[SYSTEM] /start tcp_client <host> <port>")
+        self.write_log("[SYSTEM] /cyclic \"CMD\" on tcp_server <ms>")
+        self.write_log("[SYSTEM] /cyclic \"CMD\" on tcp_client <ms>")
+        self.write_log("[SYSTEM] /cyclic stop")
+
 
     def write_log(self, msg: str):
         color = {
@@ -91,12 +96,14 @@ class OctynTUI(App):
             # ---------- STOP ----------
             if cmd == "/stop":
                 if parts[1] == "tcp_server":
+                    await cyclic.stop()
                     await tcp_server.stop()
                     runtime.mode = None
                     self.write_log("[SYSTEM] TCP SERVER stopped")
                     return
 
                 if parts[1] == "tcp_client":
+                    await cyclic.stop()
                     await tcp_client.stop()
                     runtime.mode = None
                     self.write_log("[SYSTEM] TCP CLIENT stopped")
@@ -130,6 +137,58 @@ class OctynTUI(App):
                     asyncio.create_task(tcp_client.start(host, port))
                     self.write_log(f"[SYSTEM] TCP CLIENT restarted {host}:{port}")
                     return
+
+            # ---------- CYCLIC ----------
+            if cmd == "/cyclic":
+                try:
+                    # /cyclic stop
+                    if parts[1] == "stop":
+                        await cyclic.stop()
+                        self.write_log("[SYSTEM] Cyclic command stopped")
+                        return
+
+                    # /cyclic "RHINO" on tcp_server 10000
+                    raw = msg.split('"')
+                    if len(raw) < 3:
+                        self.write_log("[ERROR] Invalid cyclic syntax")
+                        return
+
+                    command = raw[1]
+                    tail = raw[2].strip().split()
+
+                    if tail[0] != "on":
+                        self.write_log("[ERROR] Expected 'on'")
+                        return
+
+                    mode = tail[1]
+                    interval_ms = int(tail[2])
+
+                    if mode == "tcp_server":
+                        if runtime.mode != TcpMode.SERVER:
+                            self.write_log("[ERROR] tcp_server not running")
+                            return
+                        await cyclic.start(command, TcpMode.SERVER, interval_ms)
+                        self.write_log(
+                            f"[SYSTEM] Cyclic '{command}' on SERVER every {interval_ms}ms"
+                        )
+                        return
+
+                    if mode == "tcp_client":
+                        if runtime.mode != TcpMode.CLIENT:
+                            self.write_log("[ERROR] tcp_client not running")
+                            return
+                        await cyclic.start(command, TcpMode.CLIENT, interval_ms)
+                        self.write_log(
+                            f"[SYSTEM] Cyclic '{command}' on CLIENT every {interval_ms}ms"
+                        )
+                        return
+
+                    self.write_log("[ERROR] Unknown cyclic target")
+
+                except Exception as e:
+                    self.write_log(f"[ERROR] {e}")
+                return
+
 
             # ---------- SEND ----------
             if runtime.mode == TcpMode.SERVER:
